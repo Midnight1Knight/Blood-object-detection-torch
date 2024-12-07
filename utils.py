@@ -1,14 +1,13 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from PIL import Image, ImageTk
 import cv2
 import os
+from xml.etree import ElementTree as et
+from PIL import Image
+import numpy as np
+
 import torch
 from torchvision.transforms import functional as F
-import numpy as np
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from xml.etree import ElementTree as et
 
 
 def rescale_predictions(predictions, original_width, original_height):
@@ -40,7 +39,11 @@ def run_inference(model, image_path, device, classes, confidence_threshold=0.5):
         predictions = model(image_tensor)[0]
 
     filtered_boxes, filtered_labels, filtered_scores = [], [], []
-    for box, label, score in zip(predictions['boxes'].cpu().numpy(), predictions['labels'].cpu().numpy(), predictions['scores'].cpu().numpy()):
+    for box, label, score in zip(
+            predictions['boxes'].cpu().numpy(),
+            predictions['labels'].cpu().numpy(),
+            predictions['scores'].cpu().numpy()
+    ):
         if score >= confidence_threshold:
             filtered_boxes.append(box)
             filtered_labels.append(classes[label])
@@ -94,82 +97,3 @@ def process_image(image_path, model, device, classes, font_size, cell_thickness,
     image_resized = cv2.resize(image, (display_width, display_height))
     image_resized = cv2.cvtColor(image_resized, cv2.COLOR_BGR2RGB)
     return Image.fromarray(image_resized), rescaled_predictions
-
-
-class ObjectDetectionApp:
-    def __init__(self, root, model, device, classes):
-        self.root = root
-        self.model = model
-        self.device = device
-        self.classes = classes
-        self.font_size = 12
-        self.cell_thickness = 2
-        self.confidence_threshold = 0.5
-        self.img_label = tk.Label(root)
-        self.img_label.pack(pady=10)
-        self.result_label = tk.Label(root, text="Number of detected classes: 0")
-        self.result_label.pack(pady=10)
-        self.init_ui()
-
-    def init_ui(self):
-        tk.Button(self.root, text="Load Single Image", command=self.select_file).pack(pady=10)
-        font_slider = tk.Scale(
-            self.root, from_=8, to=48, orient=tk.HORIZONTAL,
-            label="Font Size", command=self.update_font_size
-        )
-        font_slider.set(self.font_size)
-        font_slider.pack(pady=10)
-        thickness_slider = tk.Scale(
-            self.root, from_=1, to=10, orient=tk.HORIZONTAL,
-            label="Cell Thickness", command=self.update_cell_thickness
-        )
-        thickness_slider.set(self.cell_thickness)
-        thickness_slider.pack(pady=10)
-        self.root.bind("<Escape>", self.exit_fullscreen)
-
-    def select_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg *.jpeg *.png")])
-        if file_path:
-            self.display_image(file_path)
-
-    def update_font_size(self, value):
-        self.font_size = int(value)
-
-    def update_cell_thickness(self, value):
-        self.cell_thickness = int(value)
-
-    def exit_fullscreen(self, event):
-        self.root.attributes('-fullscreen', False)
-
-    def display_image(self, image_path):
-        img, predictions = process_image(
-            image_path,
-            self.model,
-            self.device,
-            self.classes,
-            self.font_size,
-            self.cell_thickness,
-            self.confidence_threshold
-        )
-        photo = ImageTk.PhotoImage(img)
-        self.img_label.config(image=photo)
-        self.img_label.image = photo
-
-        unique_labels = set(predictions['labels'])
-        self.result_label.config(text=f"Detected: {len(unique_labels)} ({', '.join(unique_labels)})")
-
-
-if __name__ == "__main__":
-    train_dir = 'data/karp/train'
-    test_dir = 'data/karp/test'
-    device = torch.device('cpu')
-    train_classes = get_classes(train_dir)
-    test_classes = get_classes(test_dir)
-    classes = list(set(train_classes + test_classes))
-    model = get_object_detection_model(len(classes))
-    model.load_state_dict(torch.load('logs/pytorch_model-e3.pt', weights_only=False))
-
-    root = tk.Tk()
-    root.title("Object Detection Inference")
-    app = ObjectDetectionApp(root, model, device, classes)
-    root.mainloop()
