@@ -83,9 +83,9 @@ def process_image(image_path, model, device, classes, font_size, cell_thickness,
         xmin, ymin, xmax, ymax = map(int, box)
         cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), cell_thickness)
         cv2.putText(image, f"{label} ({score:.2f})", (xmin, ymin - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_size / 24, (0, 255, 0), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, font_size / 12, (0, 255, 0), 5)
 
-    max_width, max_height = 600, 400
+    max_width, max_height = 800, 400
     aspect_ratio = original_width / original_height
     if aspect_ratio > 1:
         display_width = max_width

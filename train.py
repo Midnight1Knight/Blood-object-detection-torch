@@ -293,7 +293,7 @@ def train_model(model, data_loader=None, num_epoch=10):
     return model
 
 
-num_epoch = 3
+num_epoch = 10
 model = train_model(model, train_loader, num_epoch)
 
 

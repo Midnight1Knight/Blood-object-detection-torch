@@ -11,9 +11,10 @@ if __name__ == "__main__":
     test_classes = get_classes(test_dir)
     classes = list(set(train_classes + test_classes))
     model = get_object_detection_model(len(classes))
-    model.load_state_dict(torch.load('logs/pytorch_model-e3.pt', weights_only=False))
+    model.load_state_dict(torch.load('logs/pytorch_model-e10.pt', weights_only=False))
 
     root = tk.Tk()
+    root.geometry("1000x800")
     root.title("Object Detection Inference")
     app = ObjectDetectionApp(root, model, device, classes)
     root.mainloop()
