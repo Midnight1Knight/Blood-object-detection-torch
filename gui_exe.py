@@ -141,8 +141,30 @@ def select_directory():
                 process_image(os.path.join(directory_path, file))
 
 
+font_size = 12
+cell_thickness = 2
+
+
+def update_font_size(value):
+    """
+    Update the font size for the text displayed on the image.
+    """
+    global font_size
+    font_size = int(value)
+    result_label.config(font=("Helvetica", font_size))
+
+
+def update_cell_thickness(value):
+    """
+    Update the thickness of the bounding box lines.
+    """
+    global cell_thickness
+    cell_thickness = int(value)
+
+
 def process_image(image_path):
     global img_label, result_label
+
     # Run inference
     predictions = run_inference(model, image_path, device, classes, confidence_threshold=0.5)
     image = cv2.imread(image_path)
@@ -152,19 +174,36 @@ def process_image(image_path):
     # Visualize results
     for box, label, score in zip(rescaled_predictions['boxes'], rescaled_predictions['labels'], rescaled_predictions['scores']):
         xmin, ymin, xmax, ymax = map(int, box)
-        cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
-        cv2.putText(image, f"{label} ({score:.2f})", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), cell_thickness)
+        cv2.putText(image, f"{label} ({score:.2f})", (xmin, ymin - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_size / 24, (0, 255, 0), 1)
+
+    # Resize the image to fit the Tkinter window while maintaining aspect ratio
+    max_width, max_height = 600, 400  # Define maximum display dimensions
+    aspect_ratio = original_width / original_height
+
+    if aspect_ratio > 1:  # Landscape
+        display_width = max_width
+        display_height = int(max_width / aspect_ratio)
+    else:  # Portrait
+        display_height = max_height
+        display_width = int(max_height * aspect_ratio)
+
+    image_resized = cv2.resize(image, (display_width, display_height))
 
     # Convert for Tkinter display
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image = Image.fromarray(image)
-    photo = ImageTk.PhotoImage(image)
+    image_resized = cv2.cvtColor(image_resized, cv2.COLOR_BGR2RGB)
+    image_resized = Image.fromarray(image_resized)
+    photo = ImageTk.PhotoImage(image_resized)
 
     # Update GUI
     img_label.config(image=photo)
     img_label.image = photo
-    num_classes = len(set(rescaled_predictions['labels']))
-    result_label.config(text=f"Number of detected classes: {num_classes}")
+
+    # Display the number of detected classes and their names
+    unique_labels = set(rescaled_predictions['labels'])
+    num_classes = len(unique_labels)
+    result_label.config(text=f"Number of detected classes: {num_classes} ({', '.join(unique_labels)})", font=("Helvetica", font_size))
 
 
 def resize_image_and_boxes(image, boxes, target_width, target_height):
@@ -208,20 +247,40 @@ def resize_image_and_boxes(image, boxes, target_width, target_height):
 # Initialize main Tkinter window
 root = tk.Tk()
 root.title("Object Detection Inference")
-root.geometry("800x600")
+# root.geometry("1000x800")
+root.attributes('-fullscreen', True)
+
+
+# Function to exit fullscreen mode
+def exit_fullscreen(event):
+    root.attributes('-fullscreen', False)
+
+
+# Bind the Escape key to exit fullscreen
+root.bind("<Escape>", exit_fullscreen)
 
 # Add GUI Components
 btn_file = tk.Button(root, text="Load Single Image", command=select_file)
 btn_file.pack(pady=10)
 
-btn_dir = tk.Button(root, text="Load Directory", command=select_directory)
-btn_dir.pack(pady=10)
+# btn_dir = tk.Button(root, text="Load Directory", command=select_directory)
+# btn_dir.pack(pady=10)
 
 img_label = tk.Label(root)
 img_label.pack(pady=10)
 
-result_label = tk.Label(root, text="Number of detected classes: 0")
-result_label.pack(pady=10)
+font_slider = tk.Scale(root, from_=8, to=48, orient=tk.HORIZONTAL, label="Font Size", command=update_font_size)
+font_slider.set(font_size)
+font_slider.pack(pady=10)
+
+# Cell thickness slider
+thickness_slider = tk.Scale(root, from_=1, to=10, orient=tk.HORIZONTAL, label="Cell Thickness", command=update_cell_thickness)
+thickness_slider.set(cell_thickness)
+thickness_slider.pack(pady=10)
+
+
+# result_label = tk.Label(root, text="Number of detected classes: 0")
+# result_label.pack(pady=10)
 
 # Load model and classes
 train_dir = 'data/karp/train'
