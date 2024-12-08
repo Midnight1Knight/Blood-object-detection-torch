@@ -12,7 +12,7 @@ class ObjectDetectionApp:
         self.classes = classes
         self.font_size = 30
         self.cell_thickness = 7
-        self.confidence_threshold = 0.5
+        self.confidence_threshold = 0.0
         self.img_label = tk.Label(root)
         self.img_label.pack(pady=10)
         self.result_label = tk.Label(root)
@@ -64,7 +64,10 @@ class ObjectDetectionApp:
         self.img_label.image = photo
 
         unique_labels = set(predictions['labels'])
+
+        result_text = "Detected:\n"
         for label in unique_labels:
-            self.result_label.config(
-                text=f"Detected: {predictions['labels'].count(label)} ({', '.join(unique_labels)})"
-            )
+            label_count = predictions['labels'].count(label)  # Count how many times this label appears
+            result_text += f"{label}: {label_count}\n"  # Add result to the text
+
+        self.result_label.config(text=result_text)

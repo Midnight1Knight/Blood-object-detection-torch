@@ -10,8 +10,8 @@ if __name__ == "__main__":
     train_classes = get_classes(train_dir)
     test_classes = get_classes(test_dir)
     classes = list(set(train_classes + test_classes))
-    model = get_object_detection_model(len(classes))
-    model.load_state_dict(torch.load('logs/pytorch_model-e10.pt', weights_only=False))
+    model = get_object_detection_model(len(classes) + 1)
+    model.load_state_dict(torch.load('logs/pytorch_model-e4.pt', weights_only=False))
 
     root = tk.Tk()
     root.geometry("1000x800")

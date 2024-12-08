@@ -5,18 +5,17 @@ import cv2
 from xml.etree import ElementTree as et
 
 import torch
-import torchvision
 
 from torchvision.models.detection import fasterrcnn_resnet50_fpn, maskrcnn_resnet50_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FasterRCNN_ResNet50_FPN_Weights
-from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
-from torchvision import transforms
 
 import time
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
 import albumentations as A
 from albumentations.pytorch.transforms import ToTensorV2
+
+from collections import Counter
 
 
 class CellImagesDataset(torch.utils.data.Dataset):
@@ -196,13 +195,13 @@ images, targets = next(iter(train_loader))
 # device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 device = torch.device('cpu')
 
-num_classes = len(train_classes)
+num_classes = len(classes) + 1
 
 model = get_object_detection_model(num_classes)
 model.to(device)
 
 params = [p for p in model.parameters() if p.requires_grad]
-optimizer = torch.optim.SGD(params, lr=0.005,
+optimizer = torch.optim.SGD(params, lr=0.001,
                             momentum=0.9, weight_decay=0.0005)
 
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
@@ -217,59 +216,56 @@ train_loss_values = []
 val_loss_values = []
 
 
-def train_model(model, data_loader=None, num_epoch=10):
+def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
     for epoch in range(1, num_epoch + 1):
         print(f"Starting epoch {epoch} of {num_epoch}")
 
         time_start = time.time()
         loss_accum = 0.0
-        # loss_mask_accum = 0.0
-        loss_classifier_accum = 0.0
-
         model.train()
 
         for batch_idx, (images, targets) in enumerate(data_loader, 1):
+            # Skip batches with empty targets
+            if any(len(t["labels"]) == 0 for t in targets):
+                continue
 
             # Predict
             images = list(image.to(device) for image in images)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
             loss_dict = model(images, targets)
-            loss = sum(loss for loss in loss_dict.values())
+
+            # Apply weights to the classification loss
+            loss_classifier = loss_dict['loss_classifier']
+            batch_weights = [
+                weights_tensor[label].mean() for target in targets for label in target["labels"]
+            ]
+            avg_batch_weight = torch.tensor(batch_weights).mean().to(device)
+
+            # Weight the classifier loss
+            weighted_loss_classifier = loss_classifier * avg_batch_weight
+
+            loss = weighted_loss_classifier + sum(
+                loss for key, loss in loss_dict.items() if key != 'loss_classifier'
+            )
 
             # Backprop
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # Logging
-            # loss_mask = loss_dict['loss_mask'].item()
+            # Accumulate loss
             loss_accum += loss.item()
-            # loss_mask_accum += loss_mask
-            loss_classifier_accum += loss_dict['loss_classifier'].item()
-
-            if batch_idx % 500 == 0:
-                print(f"    [Batch {batch_idx:3d} / {n_batches:3d}] Batch train loss: {loss.item():7.3f}.")
 
         lr_scheduler.step()
 
-        # Train losses
         train_loss = loss_accum / n_batches
-
-        # Store the loss value for training
-        train_loss_values.append(train_loss)
-
-        # train_loss_mask = loss_mask_accum / n_batches
-        train_loss_classifier = loss_classifier_accum / n_batches
-
         elapsed = time.time() - time_start
+        print(f"[Epoch {epoch:2d} / {num_epoch:2d}] Train loss: {train_loss:7.3f} [{elapsed:.0f} secs]")
 
         torch.save(model.state_dict(), f"logs/pytorch_model-e{epoch}.pt")
-        prefix = f"[Epoch {epoch:2d} / {num_epoch:2d}]"
-        # print(prefix)
-        # print(f"{prefix} Train mask-only loss: {train_loss_mask:7.3f}, classifier loss {train_loss_classifier:7.3f}")
-        print(f"{prefix} Train loss: {train_loss:7.3f} [{elapsed:.0f} secs]", end=' | ')
 
+        # Validation loop
         preds_single = []
         targets_single = []
 
@@ -287,15 +283,29 @@ def train_model(model, data_loader=None, num_epoch=10):
 
         metric.update(preds_single, targets_single)
         batch_map = metric.compute()
-        val_loss_values.append(batch_map)
         print(f"Val mAP: {batch_map['map']}")
 
     return model
 
 
-num_epoch = 10
-model = train_model(model, train_loader, num_epoch)
+class_counts = Counter()
+for _, target in dataset:
+    labels = target['labels'].tolist()
+    class_counts.update(labels)
 
+# Total number of samples
+total_samples = sum(class_counts.values())
+
+# Calculate weights inversely proportional to class frequency
+class_weights = {cls: total_samples / count for cls, count in class_counts.items()}
+
+# Convert weights to a tensor and move to the device
+weights_tensor = torch.zeros(len(classes), device=device).to(device)
+for cls, weight in class_weights.items():
+    weights_tensor[cls] = weight
+
+num_epoch = 4
+model = train_model(model, weights_tensor=weights_tensor, data_loader=train_loader, num_epoch=num_epoch)
 
 metric_test = MeanAveragePrecision()
 
