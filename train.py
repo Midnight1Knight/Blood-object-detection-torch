@@ -156,15 +156,17 @@ def get_classes(path):
     return list(classes)
 
 
-train_dir = 'data/karp/train'
-test_dir = 'data/karp/test'
+fish = 'karp'
+
+train_dir = f'data/{fish}/train'
+test_dir = f'data/{fish}/test'
 
 train_classes = get_classes(train_dir)
 test_classes = get_classes(test_dir)
 classes = list(set(train_classes + test_classes))
 class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
 
-with open('data/karp/classes.json', 'w') as f:
+with open(f'data/{fish}/classes_idx.json', 'w') as f:
     json.dump(class_to_idx, f)
 
 dataset = CellImagesDataset(train_dir, 224, 224, classes=classes, transforms=get_transform(train=True))

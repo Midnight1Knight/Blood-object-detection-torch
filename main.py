@@ -5,8 +5,9 @@ from app import ObjectDetectionApp
 import json
 
 if __name__ == "__main__":
+    fish = 'karp'
     device = torch.device('cpu')
-    with open('data/karp/classes.json', 'r') as file:
+    with open(f'data/{fish}/classes_idx.json', 'r') as file:
         classes_idx = json.load(file)
     classes = list(classes_idx.keys())
     model = get_object_detection_model(len(classes) + 1)
