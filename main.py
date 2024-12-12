@@ -2,14 +2,13 @@ import torch
 import tkinter as tk
 from utils import get_classes, get_object_detection_model
 from app import ObjectDetectionApp
+import json
 
 if __name__ == "__main__":
-    train_dir = 'data/karp/train'
-    test_dir = 'data/karp/test'
     device = torch.device('cpu')
-    train_classes = get_classes(train_dir)
-    test_classes = get_classes(test_dir)
-    classes = list(set(train_classes + test_classes))
+    with open('data/karp/classes.json', 'r') as file:
+        classes_idx = json.load(file)
+    classes = list(classes_idx.keys())
     model = get_object_detection_model(len(classes) + 1)
     model.load_state_dict(torch.load('logs/pytorch_model-e4.pt', weights_only=False))
 

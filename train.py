@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import json
 
 import cv2
 from xml.etree import ElementTree as et
@@ -161,7 +162,10 @@ test_dir = 'data/karp/test'
 train_classes = get_classes(train_dir)
 test_classes = get_classes(test_dir)
 classes = list(set(train_classes + test_classes))
+class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
 
+with open('data/karp/classes.json', 'w') as f:
+    json.dump(class_to_idx, f)
 
 dataset = CellImagesDataset(train_dir, 224, 224, classes=classes, transforms=get_transform(train=True))
 dataset_test = CellImagesDataset(test_dir, 224, 224, classes=classes, transforms=get_transform(train=False))
