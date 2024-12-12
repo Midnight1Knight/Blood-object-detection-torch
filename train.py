@@ -201,7 +201,7 @@ images, targets = next(iter(train_loader))
 # device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 device = torch.device('cpu')
 
-num_classes = len(classes) + 1
+num_classes = len(classes)
 
 model = get_object_detection_model(num_classes)
 model.to(device)
@@ -216,10 +216,6 @@ lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
 
 
 metric = MeanAveragePrecision()
-
-# Define the lists to store the loss values for training and validation
-train_loss_values = []
-val_loss_values = []
 
 
 def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
@@ -269,7 +265,7 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
         elapsed = time.time() - time_start
         print(f"[Epoch {epoch:2d} / {num_epoch:2d}] Train loss: {train_loss:7.3f} [{elapsed:.0f} secs]")
 
-        torch.save(model.state_dict(), f"logs/pytorch_model-e{epoch}.pt")
+        torch.save(model.state_dict(), f"logs/{fish}/pytorch_model-e{epoch}.pt")
 
         # Validation loop
         preds_single = []
@@ -310,7 +306,7 @@ weights_tensor = torch.zeros(len(classes), device=device).to(device)
 for cls, weight in class_weights.items():
     weights_tensor[cls] = weight
 
-num_epoch = 4
+num_epoch = 3
 model = train_model(model, weights_tensor=weights_tensor, data_loader=train_loader, num_epoch=num_epoch)
 
 metric_test = MeanAveragePrecision()
