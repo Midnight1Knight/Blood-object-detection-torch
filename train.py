@@ -188,11 +188,11 @@ train_loader = torch.utils.data.DataLoader(
     collate_fn=collate_fn)
 
 val_loader = torch.utils.data.DataLoader(
-    val_data, batch_size=5, shuffle=True, num_workers=2,
+    val_data, batch_size=5, shuffle=True, num_workers=0,
     collate_fn=collate_fn)
 
 test_loader = torch.utils.data.DataLoader(
-    dataset_test, batch_size=5, shuffle=False, num_workers=2,
+    dataset_test, batch_size=5, shuffle=False, num_workers=0,
     collate_fn=collate_fn)
 
 n_batches, n_batches_test = len(train_loader), len(test_loader)
@@ -207,12 +207,17 @@ model = get_object_detection_model(num_classes)
 model.to(device)
 
 params = [p for p in model.parameters() if p.requires_grad]
-optimizer = torch.optim.SGD(params, lr=0.001,
-                            momentum=0.9, weight_decay=0.0005)
+# lr=0.0001 for karp
+# lr=0.005 for osetr
+optimizer = torch.optim.SGD(params, lr=0.0001,
+                            momentum=0.9, weight_decay=0.005)
 
-lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
-                                               step_size=3,
-                                               gamma=0.1)
+# lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
+#                                                step_size=3,
+#                                                gamma=0.1)
+lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode='min', factor=0.5, patience=3, verbose=True
+)
 
 
 metric = MeanAveragePrecision()
@@ -247,9 +252,16 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
             # Weight the classifier loss
             weighted_loss_classifier = loss_classifier * avg_batch_weight
 
-            loss = weighted_loss_classifier + sum(
-                loss for key, loss in loss_dict.items() if key != 'loss_classifier'
-            )
+            # loss = weighted_loss_classifier + sum(
+            #     loss for key, loss in loss_dict.items() if key != 'loss_classifier'
+            # )
+
+            loss_weights = {'loss_classifier': avg_batch_weight,
+                            'loss_box_reg': 1.0,
+                            'loss_objectness': 0.5,
+                            'loss_rpn_box_reg': 0.5}
+
+            loss = sum(loss_dict[k] * loss_weights.get(k, 1.0) for k in loss_dict)
 
             # Backprop
             optimizer.zero_grad()
@@ -259,19 +271,20 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
             # Accumulate loss
             loss_accum += loss.item()
 
-        lr_scheduler.step()
-
         train_loss = loss_accum / n_batches
         elapsed = time.time() - time_start
         print(f"[Epoch {epoch:2d} / {num_epoch:2d}] Train loss: {train_loss:7.3f} [{elapsed:.0f} secs]")
 
         torch.save(model.state_dict(), f"logs/{fish}/pytorch_model-e{epoch}.pt")
 
+        # lr_scheduler.step()
+        lr_scheduler.step(train_loss)
+
         # Validation loop
         preds_single = []
         targets_single = []
 
-        for batch_idx, (images, targets) in enumerate(val_loader, 1):
+        for batch_idx, (images, targets) in enumerate(test_loader, 1):
             images = list(image.to(device) for image in images)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -285,7 +298,7 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
 
         metric.update(preds_single, targets_single)
         batch_map = metric.compute()
-        print(f"Val mAP: {batch_map['map']}")
+        print(f"Test mAP: {batch_map['map']}")
 
     return model
 
@@ -300,6 +313,7 @@ total_samples = sum(class_counts.values())
 
 # Calculate weights inversely proportional to class frequency
 class_weights = {cls: total_samples / count for cls, count in class_counts.items()}
+# class_weights = {cls: 1 + np.log(total_samples / count) for cls, count in class_counts.items()}
 
 # Convert weights to a tensor and move to the device
 weights_tensor = torch.zeros(len(classes), device=device).to(device)
@@ -314,7 +328,7 @@ metric_test = MeanAveragePrecision()
 preds_single = []
 targets_single = []
 
-for batch_idx, (images, targets) in enumerate(test_loader, 1):
+for batch_idx, (images, targets) in enumerate(val_loader, 1):
 
     images = list(image.to(device) for image in images)
     targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -330,7 +344,4 @@ for batch_idx, (images, targets) in enumerate(test_loader, 1):
 metric_test.update(preds_single, targets_single)
 test_map = metric.compute()
 
-print(f"Test mAP: {test_map['map']}")
-
-
-
+print(f"Val mAP: {test_map['map']}")
