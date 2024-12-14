@@ -9,6 +9,8 @@ class ObjectDetectionApp:
         self.root = root
         self.data = data
         self.device = device
+        self.classes = None
+        self.model = None
         self.font_size = 30
         self.cell_thickness = 7
         self.confidence_threshold = 0.5

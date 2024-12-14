@@ -311,9 +311,10 @@ for _, target in dataset:
 # Total number of samples
 total_samples = sum(class_counts.values())
 
+
 # Calculate weights inversely proportional to class frequency
-class_weights = {cls: total_samples / count for cls, count in class_counts.items()}
-# class_weights = {cls: 1 + np.log(total_samples / count) for cls, count in class_counts.items()}
+# class_weights = {cls: total_samples / count for cls, count in class_counts.items()}
+class_weights = {cls: 1 + np.log(total_samples / count) for cls, count in class_counts.items()}
 
 # Convert weights to a tensor and move to the device
 weights_tensor = torch.zeros(len(classes), device=device).to(device)
