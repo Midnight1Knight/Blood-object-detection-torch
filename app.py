@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import filedialog
 from PIL import ImageTk
 from utils import process_image
+from collections import Counter
 
 
 class ObjectDetectionApp:
@@ -21,7 +22,7 @@ class ObjectDetectionApp:
 
     def init_start_screen(self):
         """Initial screen to select the fish type."""
-        title_label = tk.Label(self.root, text="Выберите, клетки, какой рыбы предсказать", font=("Arial", 16))
+        title_label = tk.Label(self.root, text="Выберите клетки какой рыбы подсчитать", font=("Arial", 16))
         title_label.pack(pady=20)
 
         osetr_button = tk.Button(self.root, text="Осетр", command=lambda: self.select_fish("osetr"))
@@ -100,11 +101,9 @@ class ObjectDetectionApp:
         self.img_label.config(image=photo)
         self.img_label.image = photo
 
-        unique_labels = set(predictions['labels'])
-
         result_text = f"Detected for {self.selected_fish}:\n"  # Include the selected fish type in the result
-        for label in unique_labels:
-            label_count = predictions['labels'].count(label)  # Count how many times this label appears
-            result_text += f"{label}: {label_count}\n"  # Add result to the text
-
+        pred_counts = Counter(predictions['labels'])
+        len_of_preds = len(predictions["labels"])
+        for label in pred_counts:
+            result_text += f"{label}: {pred_counts[label] / len_of_preds * 100:.2f}% ({pred_counts[label]} шт.)\n"
         self.result_label.config(text=result_text)
