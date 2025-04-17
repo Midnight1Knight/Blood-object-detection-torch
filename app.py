@@ -14,7 +14,7 @@ class ObjectDetectionApp:
         self.model = None
         self.font_size = 30
         self.cell_thickness = 7
-        self.confidence_threshold = 0.5
+        self.confidence_threshold = 0.1
         self.selected_fish = None
         self.img_label = tk.Label(root)
         self.result_label = tk.Label(root)

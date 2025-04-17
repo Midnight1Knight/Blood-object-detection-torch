@@ -15,10 +15,10 @@ def rescale_predictions(predictions, original_width, original_height):
     for box in predictions['boxes']:
         xmin, ymin, xmax, ymax = box
         rescaled_boxes.append([
-            xmin * original_width / 224,
-            ymin * original_height / 224,
-            xmax * original_width / 224,
-            ymax * original_height / 224
+            xmin * original_width / 640,
+            ymin * original_height / 640,
+            xmax * original_width / 640,
+            ymax * original_height / 640
         ])
     return {
         'boxes': rescaled_boxes,
@@ -27,11 +27,11 @@ def rescale_predictions(predictions, original_width, original_height):
     }
 
 
-def run_inference(model, image_path, device, classes, confidence_threshold=0.5):
+def run_inference(model, image_path, device, classes, confidence_threshold):
     model.eval()
     image = cv2.imread(image_path)
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32)
-    image_resized = cv2.resize(image_rgb, (224, 224))
+    image_resized = cv2.resize(image_rgb, (640, 640))
     image_normalized = image_resized / 255.0
     image_tensor = F.to_tensor(image_normalized).unsqueeze(0).to(device)
 

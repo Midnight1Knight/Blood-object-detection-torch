@@ -17,7 +17,7 @@ def load_up():
         classes_idx_karp = json.load(file)
     classes_karp = list(classes_idx_karp.keys())
     model_karp = get_object_detection_model(len(classes_karp))
-    model_karp.load_state_dict(torch.load(f'logs/karp/pytorch_model-e3.pt', weights_only=False))
+    model_karp.load_state_dict(torch.load(f'logs/karp/pytorch_model-e10.pt', weights_only=False))
 
     data['osetr'] = dict()
     data['osetr']['classes'] = classes_osetr
