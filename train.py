@@ -116,31 +116,24 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
-# def get_transform(train):
-#     if train:
-#         return A.Compose([
-#             A.HorizontalFlip(0.5),
-#             A.VerticalFlip(0.3),
-#             ToTensorV2(p=1.0)
-#         ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
-#     else:
-#         return A.Compose([
-#             ToTensorV2(p=1.0)
-#         ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
-
 def get_transform(train):
     if train:
         return A.Compose([
-            A.HorizontalFlip(0.5),
-            A.VerticalFlip(0.3),
-            A.Resize(224, 224),  # Ensure resizing is explicit
+            A.RandomBrightnessContrast(p=0.3),
+            A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=10, p=0.5),
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.3),
+            A.MotionBlur(p=0.2),
+            A.HueSaturationValue(p=0.3),
+            A.Resize(height=512, width=512),  # Higher resolution
             ToTensorV2(p=1.0)
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
     else:
         return A.Compose([
-            A.Resize(224, 224),
+            A.Resize(height=512, width=512),
             ToTensorV2(p=1.0)
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
+
 
 
 def get_classes(path):
@@ -169,8 +162,8 @@ class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
 with open(f'data/{fish}/classes_idx.json', 'w') as f:
     json.dump(class_to_idx, f)
 
-dataset = CellImagesDataset(train_dir, 224, 224, classes=classes, transforms=get_transform(train=True))
-dataset_test = CellImagesDataset(test_dir, 224, 224, classes=classes, transforms=get_transform(train=False))
+dataset = CellImagesDataset(train_dir, 512, 512, classes=classes, transforms=get_transform(train=True))
+dataset_test = CellImagesDataset(test_dir, 512, 512, classes=classes, transforms=get_transform(train=False))
 
 torch.manual_seed(1)
 np.random.seed(1)
@@ -242,6 +235,10 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
 
             loss_dict = model(images, targets)
 
+            print(f"  Batch {batch_idx}/{n_batches} losses:")
+            for k, v in loss_dict.items():
+                print(f"    {k}: {v.item():.4f}")
+
             # Apply weights to the classification loss
             loss_classifier = loss_dict['loss_classifier']
             batch_weights = [
@@ -251,10 +248,6 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
 
             # Weight the classifier loss
             weighted_loss_classifier = loss_classifier * avg_batch_weight
-
-            # loss = weighted_loss_classifier + sum(
-            #     loss for key, loss in loss_dict.items() if key != 'loss_classifier'
-            # )
 
             loss_weights = {'loss_classifier': avg_batch_weight,
                             'loss_box_reg': 1.0,
@@ -294,7 +287,16 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
             with torch.no_grad():
                 pred = model(images)
 
-            preds_single.extend(pred)
+            filtered_preds = []
+            for p in pred:
+                keep = p['scores'] > 0.5  # or 0.4 depending on your data
+                filtered_preds.append({
+                    'boxes': p['boxes'][keep],
+                    'labels': p['labels'][keep],
+                    'scores': p['scores'][keep],
+                })
+
+            preds_single.extend(filtered_preds)
 
         metric.update(preds_single, targets_single)
         batch_map = metric.compute()
