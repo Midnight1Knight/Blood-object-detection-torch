@@ -218,7 +218,6 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
             if any(len(t["labels"]) == 0 for t in targets):
                 continue
 
-            # Predict
             images = list(image.to(device) for image in images)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -228,15 +227,10 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
             for k, v in loss_dict.items():
                 print(f"    {k}: {v.item():.4f}")
 
-            # Apply weights to the classification loss
-            loss_classifier = loss_dict['loss_classifier']
             batch_weights = [
                 weights_tensor[label].mean() for target in targets for label in target["labels"]
             ]
             avg_batch_weight = torch.tensor(batch_weights).mean().to(device)
-
-            # Weight the classifier loss
-            weighted_loss_classifier = loss_classifier * avg_batch_weight
 
             loss_weights = {'loss_classifier': avg_batch_weight,
                             'loss_box_reg': 1.0,
@@ -245,12 +239,10 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
 
             loss = sum(loss_dict[k] * loss_weights.get(k, 1.0) for k in loss_dict)
 
-            # Backprop
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # Accumulate loss
             loss_accum += loss.item()
 
         train_loss = loss_accum / n_batches
@@ -259,7 +251,6 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
 
         torch.save(model.state_dict(), f"logs/{fish}/pytorch_model-e{epoch}.pt")
 
-        # lr_scheduler.step()
         lr_scheduler.step(train_loss)
 
         # Validation loop
@@ -278,7 +269,7 @@ def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
 
             filtered_preds = []
             for p in pred:
-                keep = p['scores'] > 0.5  # or 0.4 depending on your data
+                keep = p['scores'] > 0.5
                 filtered_preds.append({
                     'boxes': p['boxes'][keep],
                     'labels': p['labels'][keep],
