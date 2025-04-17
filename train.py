@@ -85,13 +85,6 @@ class CellImagesDataset(torch.utils.data.Dataset):
         image_id = torch.tensor([idx])
         target["image_id"] = image_id
 
-        # if self.transforms:
-        #     sample = self.transforms(image=img_res,
-        #                              bboxes=target['boxes'],
-        #                              labels=labels)
-        #
-        #     img_res = sample['image']
-        #     target['boxes'] = torch.Tensor(sample['bboxes'])
         if self.transforms:
             sample = self.transforms(image=img_res, bboxes=target['boxes'].tolist(), labels=labels.tolist())
             img_res = sample['image']
@@ -125,12 +118,12 @@ def get_transform(train):
             A.VerticalFlip(p=0.3),
             A.MotionBlur(p=0.2),
             A.HueSaturationValue(p=0.3),
-            A.Resize(height=512, width=512),  # Higher resolution
+            A.Resize(height=640, width=640),  # Higher resolution
             ToTensorV2(p=1.0)
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
     else:
         return A.Compose([
-            A.Resize(height=512, width=512),
+            A.Resize(height=640, width=640),
             ToTensorV2(p=1.0)
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
 
@@ -162,8 +155,8 @@ class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
 with open(f'data/{fish}/classes_idx.json', 'w') as f:
     json.dump(class_to_idx, f)
 
-dataset = CellImagesDataset(train_dir, 512, 512, classes=classes, transforms=get_transform(train=True))
-dataset_test = CellImagesDataset(test_dir, 512, 512, classes=classes, transforms=get_transform(train=False))
+dataset = CellImagesDataset(train_dir, 640, 640, classes=classes, transforms=get_transform(train=True))
+dataset_test = CellImagesDataset(test_dir, 640, 640, classes=classes, transforms=get_transform(train=False))
 
 torch.manual_seed(1)
 np.random.seed(1)
@@ -200,14 +193,10 @@ model = get_object_detection_model(num_classes)
 model.to(device)
 
 params = [p for p in model.parameters() if p.requires_grad]
-# lr=0.0001 for karp
-# lr=0.005 for osetr
-optimizer = torch.optim.SGD(params, lr=0.0001,
+
+optimizer = torch.optim.SGD(params, lr=0.005,
                             momentum=0.9, weight_decay=0.005)
 
-# lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
-#                                                step_size=3,
-#                                                gamma=0.1)
 lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer, mode='min', factor=0.5, patience=3, verbose=True
 )
@@ -315,7 +304,6 @@ total_samples = sum(class_counts.values())
 
 
 # Calculate weights inversely proportional to class frequency
-# class_weights = {cls: total_samples / count for cls, count in class_counts.items()}
 class_weights = {cls: 1 + np.log(total_samples / count) for cls, count in class_counts.items()}
 
 # Convert weights to a tensor and move to the device
@@ -323,7 +311,7 @@ weights_tensor = torch.zeros(len(classes), device=device).to(device)
 for cls, weight in class_weights.items():
     weights_tensor[cls] = weight
 
-num_epoch = 3
+num_epoch = 10
 model = train_model(model, weights_tensor=weights_tensor, data_loader=train_loader, num_epoch=num_epoch)
 
 metric_test = MeanAveragePrecision()
