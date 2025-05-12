@@ -170,15 +170,15 @@ val_data = torch.utils.data.Subset(dataset, indices[tsize:])
 
 
 train_loader = torch.utils.data.DataLoader(
-    train_data, batch_size=5, shuffle=True, num_workers=2,
+    train_data, batch_size=3, shuffle=True, num_workers=0,
     collate_fn=collate_fn)
 
 val_loader = torch.utils.data.DataLoader(
-    val_data, batch_size=5, shuffle=True, num_workers=0,
+    val_data, batch_size=3, shuffle=True, num_workers=0,
     collate_fn=collate_fn)
 
 test_loader = torch.utils.data.DataLoader(
-    dataset_test, batch_size=5, shuffle=False, num_workers=0,
+    dataset_test, batch_size=3, shuffle=False, num_workers=0,
     collate_fn=collate_fn)
 
 n_batches, n_batches_test = len(train_loader), len(test_loader)
@@ -304,6 +304,7 @@ for cls, weight in class_weights.items():
 
 num_epoch = 10
 model = train_model(model, weights_tensor=weights_tensor, data_loader=train_loader, num_epoch=num_epoch)
+torch.cuda.empty_cache()
 
 metric_test = MeanAveragePrecision()
 
