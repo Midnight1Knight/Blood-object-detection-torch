@@ -1,0 +1,13 @@
+fish: karp
+img_size: [640, 640]
+batch_size: 3
+num_workers: 0
+num_epochs: 10
+lr: 0.005
+weight_decay: 0.005
+momentum: 0.9
+
+paths:
+  train_dir: data/karp/train
+  test_dir: data/karp/test
+  log_dir: train/logs/karp
