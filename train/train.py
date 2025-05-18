@@ -25,19 +25,19 @@ from albumentations.pytorch.transforms import ToTensorV2
 class Config:
     def __init__(self, yaml_path="train/config.yaml"):
         with open(yaml_path, 'r') as f:
-            data = yaml.safe_load(f)
+            yaml_config = yaml.safe_load(f)
 
-        self.fish = data['fish']
-        self.img_size = tuple(data['img_size'])
-        self.batch_size = data['batch_size']
-        self.num_workers = data['num_workers']
-        self.num_epochs = data['num_epochs']
-        self.lr = data['lr']
-        self.weight_decay = data['weight_decay']
-        self.momentum = data['momentum']
-        self.train_dir = data['paths']['train_dir']
-        self.test_dir = data['paths']['test_dir']
-        self.log_dir = data['paths']['log_dir']
+        self.fish = yaml_config['fish']
+        self.img_size = tuple(yaml_config['img_size'])
+        self.batch_size = yaml_config['batch_size']
+        self.num_workers = min(yaml_config["num_workers"], os.cpu_count() or 1)
+        self.num_epochs = yaml_config['num_epochs']
+        self.lr = yaml_config['lr']
+        self.weight_decay = yaml_config['weight_decay']
+        self.momentum = yaml_config['momentum']
+        self.train_dir = yaml_config['paths']['train_dir']
+        self.test_dir = yaml_config['paths']['test_dir']
+        self.log_dir = yaml_config['paths']['log_dir']
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
@@ -121,7 +121,7 @@ class Transforms:
 
         aug = [
             A.RandomBrightnessContrast(p=0.3),
-            A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=10, p=0.5),
+            # A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.2, rotate_limit=15, p=0.5),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.3),
             A.MotionBlur(p=0.2),
@@ -154,16 +154,16 @@ class Trainer:
         self.metric = MeanAveragePrecision()
         self.log_dir = log_dir
 
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_file = os.path.join(self.log_dir, f"training_{timestamp}.log")
-
-        logger.add(
-            log_file,
-            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {name}:{line} - {message}",
-            level="INFO"
-        )
-
-        logger.info(f"Logging to file: {log_file}")
+        # timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        # log_file = os.path.join(self.log_dir, f"training_{timestamp}.log")
+        #
+        # logger.add(
+        #     log_file,
+        #     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {name}:{line} - {message}",
+        #     level="INFO"
+        # )
+        #
+        # logger.info(f"Logging to file: {log_file}")
 
     def train(self):
         for epoch in range(1, self.num_epochs + 1):
@@ -171,6 +171,7 @@ class Trainer:
             train_loss = self._train_epoch(epoch)
             val_loss = self._validate_epoch(epoch)
             logger.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            self.scheduler.step()
             torch.save(self.model.state_dict(), f"{self.log_dir}/pytorch_model-e{epoch}.pt")
         return self.model
 
@@ -179,9 +180,10 @@ class Trainer:
         self.metric.update(preds, targets)
         results = self.metric.compute()
         map_value = results['map'].item()
-
-        logger.info(f"{prefix}mAP: {map_value:.4f}")
-        return {'map': map_value}
+        map_50 = results['map_50'].item()
+        map_75 = results['map_75'].item()
+        logger.info(f"{prefix}mAP: {map_value:.4f}, mAP@50: {map_50:.4f}, mAP@75: {map_75:.4f}")
+        return {'map': map_value, 'map_50': map_50, 'map_75': map_75}
 
     def process_epoch(self, data_loader, epoch, is_training=False):
         self.current_epoch = epoch
@@ -253,7 +255,6 @@ class Trainer:
 
         self.calculate_metrics(preds, targets_all, prefix="Train ")
         logger.info(f"Train Classifier Loss: {avg_classifier_loss:.4f}, Train Objectness Loss: {avg_objectness_loss:.4f}")
-        self.scheduler.step(avg_loss)
         return avg_loss
 
     def _validate_epoch(self, epoch):
@@ -293,8 +294,9 @@ def run_training(cfg: Config):
     save_class_index_map(cfg.fish, classes)
 
     train_ds = CellImagesDataset(cfg.train_dir, *cfg.img_size, classes, Transforms.get(True, cfg.img_size))
-    test_ds = CellImagesDataset(cfg.test_dir, *cfg.img_size, classes, Transforms.get(False, cfg.img_size))
+    # test_ds = CellImagesDataset(cfg.test_dir, *cfg.img_size, classes, Transforms.get(False, cfg.img_size))
 
+    np.random.seed(42)
     indices = np.random.permutation(len(train_ds)).tolist()
     split_idx = int(len(train_ds) * 0.9)
     train_data = Subset(train_ds, indices[:split_idx])
@@ -304,11 +306,22 @@ def run_training(cfg: Config):
     val_loader = get_dataloader(val_data, cfg, shuffle=False)
 
     model = ModelFactory.create(len(classes))
-    optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=cfg.lr, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+
+    params = [
+        {"params": model.backbone.parameters(), "lr": cfg.lr / 10},
+        {"params": model.rpn.parameters(), "lr": cfg.lr},
+        {"params": model.roi_heads.parameters(), "lr": cfg.lr},
+    ]
+
+    optimizer = torch.optim.SGD(
+        params, lr=cfg.lr, momentum=cfg.momentum, weight_decay=cfg.weight_decay
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.num_epochs)
     class_weights = ClassStats(train_ds, len(classes), cfg.device).compute_class_weights()
 
-    trainer = Trainer(model, optimizer, scheduler, train_loader, val_loader, class_weights, cfg.device, cfg.log_dir, cfg.num_epochs)
+    trainer = Trainer(
+        model, optimizer, scheduler, train_loader, val_loader, class_weights, cfg.device, cfg.log_dir, cfg.num_epochs
+    )
     trainer.train()
 
 if __name__ == "__main__":
