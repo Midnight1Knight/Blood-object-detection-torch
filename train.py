@@ -1,36 +1,42 @@
 import os
-import numpy as np
 import json
-
+import numpy as np
 import cv2
 from xml.etree import ElementTree as et
+from collections import Counter
 
 import torch
-
-from torchvision.models.detection import fasterrcnn_resnet50_fpn, maskrcnn_resnet50_fpn
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FasterRCNN_ResNet50_FPN_Weights
-
-import time
+from torch.utils.data import Dataset, DataLoader, Subset
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
+
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FasterRCNN_ResNet50_FPN_Weights
 
 import albumentations as A
 from albumentations.pytorch.transforms import ToTensorV2
 
-from collections import Counter
+
+# --------------------------- CONFIG ---------------------------
+class Config:
+    fish = 'karp'
+    img_size = (640, 640)
+    batch_size = 3
+    num_workers = 0
+    num_epochs = 10
+    train_dir = f'data/{fish}/train'
+    test_dir = f'data/{fish}/test'
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-class CellImagesDataset(torch.utils.data.Dataset):
-
+# --------------------------- DATASET ---------------------------
+class CellImagesDataset(Dataset):
     def __init__(self, files_dir, width, height, classes, transforms=None):
-        self.transforms = transforms
         self.files_dir = files_dir
-        self.height = height
         self.width = width
-
-        self.imgs = [image for image in sorted(os.listdir(files_dir))
-                     if image[-4:] == '.jpg']
-
+        self.height = height
+        self.transforms = transforms
         self.classes = classes
+        self.imgs = [img for img in sorted(os.listdir(files_dir)) if img.endswith('.jpg')]
 
     def __getitem__(self, idx):
         img_name = self.imgs[idx]
@@ -39,51 +45,28 @@ class CellImagesDataset(torch.utils.data.Dataset):
         img = cv2.imread(image_path)
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
         img_res = cv2.resize(img_rgb, (self.width, self.height), cv2.INTER_AREA)
-
         img_res /= 255.0
 
-        annot_filename = img_name[:-4] + '.xml'
-        annot_file_path = os.path.join(self.files_dir, annot_filename)
-
-        boxes = []
-        labels = []
-        tree = et.parse(annot_file_path)
+        annot_path = os.path.join(self.files_dir, img_name.replace('.jpg', '.xml'))
+        tree = et.parse(annot_path)
         root = tree.getroot()
+        ht, wt = img.shape[:2]
 
-        wt = img.shape[1]
-        ht = img.shape[0]
+        boxes, labels = [], []
+        for obj in root.findall('object'):
+            labels.append(self.classes.index(obj.find('name').text))
+            bndbox = obj.find('bndbox')
+            xmin = int(bndbox.find('xmin').text) * self.width / wt
+            xmax = int(bndbox.find('xmax').text) * self.width / wt
+            ymin = int(bndbox.find('ymin').text) * self.height / ht
+            ymax = int(bndbox.find('ymax').text) * self.height / ht
+            boxes.append([xmin, ymin, xmax, ymax])
 
-        for member in root.findall('object'):
-            labels.append(self.classes.index(member.find('name').text))
-            xmin = int(member.find('bndbox').find('xmin').text)
-            xmax = int(member.find('bndbox').find('xmax').text)
-
-            ymin = int(member.find('bndbox').find('ymin').text)
-            ymax = int(member.find('bndbox').find('ymax').text)
-
-            xmin_corr = (xmin / wt) * self.width
-            xmax_corr = (xmax / wt) * self.width
-            ymin_corr = (ymin / ht) * self.height
-            ymax_corr = (ymax / ht) * self.height
-
-            boxes.append([xmin_corr, ymin_corr, xmax_corr, ymax_corr])
-
-        boxes = torch.as_tensor(boxes, dtype=torch.float32)
-
-        area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
-
+        boxes = torch.tensor(boxes, dtype=torch.float32)
+        labels = torch.tensor(labels, dtype=torch.int64)
+        area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
         iscrowd = torch.zeros((boxes.shape[0],), dtype=torch.int64)
-
-        labels = torch.as_tensor(labels, dtype=torch.int64)
-
-        target = {}
-        target["boxes"] = boxes
-        target["labels"] = labels
-        target["area"] = area
-        target["iscrowd"] = iscrowd
-
-        image_id = torch.tensor([idx])
-        target["image_id"] = image_id
+        target = {"boxes": boxes, "labels": labels, "area": area, "iscrowd": iscrowd, "image_id": torch.tensor([idx])}
 
         if self.transforms:
             sample = self.transforms(image=img_res, bboxes=target['boxes'].tolist(), labels=labels.tolist())
@@ -97,234 +80,169 @@ class CellImagesDataset(torch.utils.data.Dataset):
         return len(self.imgs)
 
 
-def get_object_detection_model(num_classes):
-    model = fasterrcnn_resnet50_fpn(weights=FasterRCNN_ResNet50_FPN_Weights.DEFAULT)
-    in_features = model.roi_heads.box_predictor.cls_score.in_features
-    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+# --------------------------- TRANSFORMS ---------------------------
+class Transforms:
+    @staticmethod
+    def get(train=True):
+        if train:
+            return A.Compose([
+                A.RandomBrightnessContrast(p=0.3),
+                A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=10, p=0.5),
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.3),
+                A.MotionBlur(p=0.2),
+                A.HueSaturationValue(p=0.3),
+                A.Resize(height=640, width=640),
+                ToTensorV2(p=1.0)
+            ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
+        else:
+            return A.Compose([
+                A.Resize(height=640, width=640),
+                ToTensorV2(p=1.0)
+            ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
 
-    return model
+
+# --------------------------- MODEL FACTORY ---------------------------
+class ModelFactory:
+    @staticmethod
+    def create(num_classes):
+        model = fasterrcnn_resnet50_fpn(weights=FasterRCNN_ResNet50_FPN_Weights.DEFAULT)
+        in_features = model.roi_heads.box_predictor.cls_score.in_features
+        model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        return model
 
 
+# --------------------------- DATASET MANAGER ---------------------------
+class DatasetManager:
+    def __init__(self, train_dir, test_dir):
+        self.train_dir = train_dir
+        self.test_dir = test_dir
+
+    def get_classes(self):
+        classes = set()
+        for path in [self.train_dir, self.test_dir]:
+            for file in os.listdir(path):
+                if file.endswith('.xml'):
+                    tree = et.parse(os.path.join(path, file))
+                    for obj in tree.getroot().findall('object'):
+                        classes.add(obj.find('name').text)
+        return sorted(classes)
+
+    def split_dataset(self, dataset, val_split=0.1):
+        indices = np.random.permutation(len(dataset)).tolist()
+        split_idx = int(len(dataset) * (1 - val_split))
+        return Subset(dataset, indices[:split_idx]), Subset(dataset, indices[split_idx:])
+
+
+# --------------------------- CLASS STATS ---------------------------
+class ClassStats:
+    def __init__(self, dataset, num_classes, device):
+        self.dataset = dataset
+        self.num_classes = num_classes
+        self.device = device
+
+    def compute_class_weights(self):
+        counter = Counter()
+        for _, target in self.dataset:
+            counter.update(target["labels"].tolist())
+        total = sum(counter.values())
+        weights = torch.zeros(self.num_classes, device=self.device)
+        for cls, freq in counter.items():
+            weights[cls] = 1 + np.log(total / freq)
+        return weights
+
+
+# --------------------------- TRAINER ---------------------------
+class Trainer:
+    def __init__(self, model, optimizer, scheduler, train_loader, val_loader, class_weights, device, log_dir, num_epochs=10):
+        self.model = model.to(device)
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.class_weights = class_weights
+        self.device = device
+        self.num_epochs = num_epochs
+        self.metric = MeanAveragePrecision()
+        self.log_dir = log_dir
+
+    def train(self):
+        for epoch in range(1, self.num_epochs + 1):
+            self._train_epoch(epoch)
+            self._validate(epoch)
+        return self.model
+
+    def _train_epoch(self, epoch):
+        self.model.train()
+        loss_accum = 0.0
+        for images, targets in self.train_loader:
+            if any(len(t["labels"]) == 0 for t in targets):
+                continue
+            images = [img.to(self.device) for img in images]
+            targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
+
+            loss_dict = self.model(images, targets)
+            batch_weights = [self.class_weights[label].mean() for target in targets for label in target["labels"]]
+            avg_weight = torch.tensor(batch_weights).mean().to(self.device)
+            loss_weights = {'loss_classifier': avg_weight, 'loss_box_reg': 1.0, 'loss_objectness': 0.5, 'loss_rpn_box_reg': 0.5}
+            loss = sum(loss_dict[k] * loss_weights.get(k, 1.0) for k in loss_dict)
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            loss_accum += loss.item()
+
+        train_loss = loss_accum / len(self.train_loader)
+        print(f"[Epoch {epoch}] Train Loss: {train_loss:.4f}")
+        self.scheduler.step(train_loss)
+        os.makedirs(self.log_dir, exist_ok=True)
+        torch.save(self.model.state_dict(), f"{self.log_dir}/pytorch_model-e{epoch}.pt")
+
+    def _validate(self, epoch):
+        self.model.eval()
+        preds, targets = [], []
+        with torch.no_grad():
+            for images, targets_batch in self.val_loader:
+                images = [img.to(self.device) for img in images]
+                targets_batch = [{k: v.to(self.device) for k, v in t.items()} for t in targets_batch]
+                outputs = self.model(images)
+                preds.extend(outputs)
+                targets.extend(targets_batch)
+
+        self.metric.update(preds, targets)
+        val_map = self.metric.compute()
+        print(f"[Epoch {epoch}] Val mAP: {val_map['map']}")
+
+
+# --------------------------- MAIN ---------------------------
 def collate_fn(batch):
     return tuple(zip(*batch))
 
 
-def get_transform(train):
-    if train:
-        return A.Compose([
-            A.RandomBrightnessContrast(p=0.3),
-            A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=10, p=0.5),
-            A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.3),
-            A.MotionBlur(p=0.2),
-            A.HueSaturationValue(p=0.3),
-            A.Resize(height=640, width=640),  # Higher resolution
-            ToTensorV2(p=1.0)
-        ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
-    else:
-        return A.Compose([
-            A.Resize(height=640, width=640),
-            ToTensorV2(p=1.0)
-        ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
+def main():
+    cfg = Config()
+    dm = DatasetManager(cfg.train_dir, cfg.test_dir)
+    classes = dm.get_classes()
 
+    with open(f'data/{cfg.fish}/classes_idx.json', 'w') as f:
+        json.dump({cls: i for i, cls in enumerate(classes)}, f)
 
+    dataset = CellImagesDataset(cfg.train_dir, *cfg.img_size, classes, Transforms.get(train=True))
+    dataset_test = CellImagesDataset(cfg.test_dir, *cfg.img_size, classes, Transforms.get(train=False))
 
-def get_classes(path):
-    classes = set()
-    for filename in os.listdir(path):
-        if filename.endswith('.xml'):
-            with open(os.path.join(path, filename)) as f:
-                tree = et.parse(f)
-                root = tree.getroot()
-                for obj in root.findall('object'):
-                    name = obj.find('name').text
-                    classes.add(name)
-    return list(classes)
+    train_data, val_data = dm.split_dataset(dataset)
+    train_loader = DataLoader(train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, collate_fn=collate_fn)
+    val_loader = DataLoader(val_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, collate_fn=collate_fn)
 
+    model = ModelFactory.create(len(classes))
+    optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=0.005, momentum=0.9, weight_decay=0.005)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
-fish = 'karp'
+    class_weights = ClassStats(dataset, len(classes), cfg.device).compute_class_weights()
 
-train_dir = f'data/{fish}/train'
-test_dir = f'data/{fish}/test'
+    trainer = Trainer(model, optimizer, scheduler, train_loader, val_loader, class_weights, cfg.device, f"logs/{cfg.fish}", cfg.num_epochs)
+    trainer.train()
 
-train_classes = get_classes(train_dir)
-test_classes = get_classes(test_dir)
-classes = list(set(train_classes + test_classes))
-class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
 
-with open(f'data/{fish}/classes_idx.json', 'w') as f:
-    json.dump(class_to_idx, f)
-
-dataset = CellImagesDataset(train_dir, 640, 640, classes=classes, transforms=get_transform(train=True))
-dataset_test = CellImagesDataset(test_dir, 640, 640, classes=classes, transforms=get_transform(train=False))
-
-torch.manual_seed(1)
-np.random.seed(1)
-indices = np.random.permutation(len(dataset)).tolist()
-
-val_split = 0.1
-tsize = len(dataset) - int(len(dataset) * val_split)
-
-train_data = torch.utils.data.Subset(dataset, indices[:tsize])
-val_data = torch.utils.data.Subset(dataset, indices[tsize:])
-
-
-train_loader = torch.utils.data.DataLoader(
-    train_data, batch_size=3, shuffle=True, num_workers=0,
-    collate_fn=collate_fn)
-
-val_loader = torch.utils.data.DataLoader(
-    val_data, batch_size=3, shuffle=True, num_workers=0,
-    collate_fn=collate_fn)
-
-test_loader = torch.utils.data.DataLoader(
-    dataset_test, batch_size=3, shuffle=False, num_workers=0,
-    collate_fn=collate_fn)
-
-n_batches, n_batches_test = len(train_loader), len(test_loader)
-images, targets = next(iter(train_loader))
-
-# device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-device = torch.device('cpu')
-
-num_classes = len(classes)
-
-model = get_object_detection_model(num_classes)
-model.to(device)
-
-params = [p for p in model.parameters() if p.requires_grad]
-
-optimizer = torch.optim.SGD(params, lr=0.005,
-                            momentum=0.9, weight_decay=0.005)
-
-lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer, mode='min', factor=0.5, patience=3, verbose=True
-)
-
-
-metric = MeanAveragePrecision()
-
-
-def train_model(model, weights_tensor, data_loader=None, num_epoch=10):
-    for epoch in range(1, num_epoch + 1):
-        print(f"Starting epoch {epoch} of {num_epoch}")
-
-        time_start = time.time()
-        loss_accum = 0.0
-        model.train()
-
-        for batch_idx, (images, targets) in enumerate(data_loader, 1):
-            # Skip batches with empty targets
-            if any(len(t["labels"]) == 0 for t in targets):
-                continue
-
-            images = list(image.to(device) for image in images)
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-            loss_dict = model(images, targets)
-
-            print(f"  Batch {batch_idx}/{n_batches} losses:")
-            for k, v in loss_dict.items():
-                print(f"    {k}: {v.item():.4f}")
-
-            batch_weights = [
-                weights_tensor[label].mean() for target in targets for label in target["labels"]
-            ]
-            avg_batch_weight = torch.tensor(batch_weights).mean().to(device)
-
-            loss_weights = {'loss_classifier': avg_batch_weight,
-                            'loss_box_reg': 1.0,
-                            'loss_objectness': 0.5,
-                            'loss_rpn_box_reg': 0.5}
-
-            loss = sum(loss_dict[k] * loss_weights.get(k, 1.0) for k in loss_dict)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            loss_accum += loss.item()
-
-        train_loss = loss_accum / n_batches
-        elapsed = time.time() - time_start
-        print(f"[Epoch {epoch:2d} / {num_epoch:2d}] Train loss: {train_loss:7.3f} [{elapsed:.0f} secs]")
-
-        torch.save(model.state_dict(), f"logs/{fish}/pytorch_model-e{epoch}.pt")
-
-        lr_scheduler.step(train_loss)
-
-        # Validation loop
-        preds_single = []
-        targets_single = []
-
-        for batch_idx, (images, targets) in enumerate(test_loader, 1):
-            images = list(image.to(device) for image in images)
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-            targets_single.extend(targets)
-
-            model.eval()
-            with torch.no_grad():
-                pred = model(images)
-
-            filtered_preds = []
-            for p in pred:
-                keep = p['scores'] > 0.5
-                filtered_preds.append({
-                    'boxes': p['boxes'][keep],
-                    'labels': p['labels'][keep],
-                    'scores': p['scores'][keep],
-                })
-
-            preds_single.extend(filtered_preds)
-
-        metric.update(preds_single, targets_single)
-        batch_map = metric.compute()
-        print(f"Test mAP: {batch_map['map']}")
-
-    return model
-
-
-class_counts = Counter()
-for _, target in dataset:
-    labels = target['labels'].tolist()
-    class_counts.update(labels)
-
-# Total number of samples
-total_samples = sum(class_counts.values())
-
-
-# Calculate weights inversely proportional to class frequency
-class_weights = {cls: 1 + np.log(total_samples / count) for cls, count in class_counts.items()}
-
-# Convert weights to a tensor and move to the device
-weights_tensor = torch.zeros(len(classes), device=device).to(device)
-for cls, weight in class_weights.items():
-    weights_tensor[cls] = weight
-
-num_epoch = 10
-model = train_model(model, weights_tensor=weights_tensor, data_loader=train_loader, num_epoch=num_epoch)
-torch.cuda.empty_cache()
-
-metric_test = MeanAveragePrecision()
-
-preds_single = []
-targets_single = []
-
-for batch_idx, (images, targets) in enumerate(val_loader, 1):
-
-    images = list(image.to(device) for image in images)
-    targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-    targets_single.extend(targets)
-
-    model.eval()
-    with torch.no_grad():
-        pred = model(images)
-
-    preds_single.extend(pred)
-
-metric_test.update(preds_single, targets_single)
-test_map = metric.compute()
-
-print(f"Val mAP: {test_map['map']}")
+if __name__ == "__main__":
+    main()
