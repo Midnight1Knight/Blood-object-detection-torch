@@ -7,17 +7,17 @@ import logging
 def load_up():
     data = dict()
 
-    with open(f'../data/osetr/classes_idx.json', 'r') as file:
+    with open(f'data/osetr/classes_idx.json', 'r') as file:
         classes_idx_osetr = json.load(file)
     classes_osetr = list(classes_idx_osetr.keys())
     model_osetr = get_object_detection_model(len(classes_osetr))
-    model_osetr.load_state_dict(torch.load(f'../logs/osetr/pytorch_model-e100.pt', weights_only=False))
+    model_osetr.load_state_dict(torch.load(f'train/logs/osetr/pytorch_model-e100.pt', weights_only=False))
 
-    with open(f'../data/karp/classes_idx.json', 'r') as file:
+    with open(f'data/karp/classes_idx.json', 'r') as file:
         classes_idx_karp = json.load(file)
     classes_karp = list(classes_idx_karp.keys())
     model_karp = get_object_detection_model(len(classes_karp))
-    model_karp.load_state_dict(torch.load(f'../logs/karp/pytorch_model-e10.pt', weights_only=False))
+    model_karp.load_state_dict(torch.load(f'train/logs/karp/pytorch_model-e10.pt', weights_only=False))
 
     data['osetr'] = dict()
     data['osetr']['classes'] = classes_osetr
