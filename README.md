@@ -8,3 +8,6 @@ This is a project with the implementation of computer vision in blood, in this c
 * utils.py - functions that are used throughout the project.
 ## Train model for using
 * train.py - file with all functions inside for train.
+
+# Dimploma thesis
+[diploma_thesis.pdf](https://github.com/user-attachments/files/22476234/diploma_thesis.pdf)
